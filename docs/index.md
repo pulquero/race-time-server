@@ -1,6 +1,8 @@
 
-Race time server
+Race Time Server
 
-[LiveTime](https://www.livetimescoring.com/) scoring for [TBS RaceTracker](https://www.team-blacksheep.com/products/prod:tbs_racetracker).
+Race Time Server provides an interface between third-party timing software,
+such as [LiveTime](https://www.livetimescoring.com/),
+and [TBS RaceTracker](https://www.team-blacksheep.com/products/prod:tbs_racetracker).
 
 

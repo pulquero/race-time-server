@@ -1,0 +1,10 @@
+<resources>
+    <string name="app_name">Race Time Server</string>
+    <string name="startScan">Scan</string>
+    <string name="stopScan">Stop</string>
+    <string name="connect">Connect</string>
+    <string name="errNoBluetooth">Bluetooth not available</string>
+    <string name="errLocationOff">Location services not enabled</string>
+    <string name="startServer">Start</string>
+    <string name="stopServer">Stop</string>
+</resources>

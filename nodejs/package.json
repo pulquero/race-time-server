@@ -1,0 +1,31 @@
+{
+  "name": "race-timer-socket-bridge",
+  "version": "1.0.0",
+  "description": "Socket bridge for Race Time Server",
+  "main": "server.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node server.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pulquero/race-time-server.git"
+  },
+  "keywords": [
+    "fpv",
+    "race",
+    "drone",
+    "timer"
+  ],
+  "author": "Mark Hale",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/pulquero/race-time-server/issues"
+  },
+  "homepage": "https://pulquero.github.io/race-time-server/",
+  "dependencies": {
+    "express": "^4.16.4",
+    "socket.io": "^2.2.0",
+    "websocket": "^1.0.28"
+  }
+}
