@@ -40,7 +40,7 @@ class ScanResultsAdapter extends RecyclerView.Adapter<ScanResultsAdapter.ViewHol
     }
 
     private static final Comparator<ScanResult> SORTING_COMPARATOR = (lhs, rhs) ->
-            lhs.getBleDevice().getName().compareTo(rhs.getBleDevice().getName());
+        Integer.compare(lhs.getRssi(), rhs.getRssi());
     private final List<ScanResult> data = new ArrayList<>();
     private OnAdapterItemClickListener onAdapterItemClickListener;
     private final View.OnClickListener onClickListener = new View.OnClickListener() {
@@ -88,7 +88,8 @@ class ScanResultsAdapter extends RecyclerView.Adapter<ScanResultsAdapter.ViewHol
     public void onBindViewHolder(@NonNull ViewHolder holder, int position) {
         final ScanResult rxBleScanResult = data.get(position);
         final RxBleDevice bleDevice = rxBleScanResult.getBleDevice();
-        holder.line1.setText(String.format(Locale.getDefault(), "%s (%s)", bleDevice.getName(), bleDevice.getMacAddress()));
+        final String name = bleDevice.getName();
+        holder.line1.setText(String.format(Locale.getDefault(), "%s (%s)", (name != null) ? name : "", bleDevice.getMacAddress()));
         holder.line2.setText(String.format(Locale.getDefault(), "RSSI: %d", rxBleScanResult.getRssi()));
     }
 

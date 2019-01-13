@@ -7,4 +7,5 @@
     <string name="errLocationOff">Location services not enabled</string>
     <string name="startServer">Start</string>
     <string name="stopServer">Stop</string>
+    <string name="send">Send</string>
 </resources>
