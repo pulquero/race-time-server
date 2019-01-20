@@ -18,7 +18,7 @@ public class RaceTracker {
     public static final ParcelUuid SERVICE_UUID = ParcelUuid.fromString("0000FFF0-0000-1000-8000-00805F9B34FB");
     private static final UUID WRITE_UUID = createUUID16("FFF1");
     private static final UUID READ_UUID = createUUID16("FFF2");
-    private static final int MTU = 16;
+    private static final int MAX_DATA_SIZE = 20;
     private static final int RETRIES = 3;
 
     private static final String BATTERY = "B";
@@ -39,6 +39,7 @@ public class RaceTracker {
      * Z $pilot $bandChannel
      */
     private static final String PILOTS = "N";
+    private static final String PILOTS_RESPONSE = "Racers";
     private static final String RSSI = "Q";
     private static final String ROUNDS = "R";
     private static final String TIME_LOG = "T";
@@ -109,7 +110,7 @@ public class RaceTracker {
     }
 
     public Observable<String> sendAndObserve(String cmd) {
-        if(cmd.length() + 1 > MTU) { // including null terminator
+        if(cmd.length() + 1 > MAX_DATA_SIZE) { // including null terminator
             throw new IllegalArgumentException("Invalid command - too long");
         }
 
@@ -121,12 +122,16 @@ public class RaceTracker {
             .subscribeOn(Schedulers.io())
             .flatMapSingle(
                     conn -> {
+                        Thread.sleep(250L);
                         byte[] s = cmd.getBytes(StandardCharsets.US_ASCII);
                         // add null terminator
-                        byte[] sz = new byte[MTU];
+                        byte[] sz = new byte[MAX_DATA_SIZE];
                         System.arraycopy(s, 0, sz, 0, s.length);
                         return conn.writeCharacteristic(WRITE_UUID, sz)
-                                .flatMap(writtenSZ -> conn.readCharacteristic(READ_UUID));
+                                .flatMap(writtenSZ -> {
+                                    Thread.sleep(250L);
+                                    return conn.readCharacteristic(READ_UUID);
+                                });
                     })
             .map(readSZ -> {
                 // strip null terminator
@@ -143,14 +148,33 @@ public class RaceTracker {
         return sendAndObserve(cmd).blockingFirst();
     }
 
+    private String readValue(String cmd, String expectedResponse) {
+        String returnValue = null;
+        for(int i=0; returnValue == null && i<RETRIES; i++) {
+            String result = send(cmd);
+            int pos = result.indexOf(':');
+            String returnedResponse = result.substring(0, pos);
+            if(expectedResponse.equals(returnedResponse)) {
+                returnValue = result.substring(pos + 1).trim();
+            }
+        }
+
+        if(returnValue == null) {
+            throw new BleException(String.format("Failed to read '%s' after %d retries", cmd, RETRIES));
+        }
+
+        return returnValue;
+    }
+
     public int getRssi() {
+        String result = send(RSSI);
         return 0;
     }
 
     public int getPilotCount() {
         if(pilotCount == 0) {
-            String result = send(PILOTS);
-            pilotCount = Integer.parseInt(getValue(result));
+            String value = readValue(PILOTS, PILOTS_RESPONSE);
+            pilotCount = Integer.parseInt(value);
         }
         return pilotCount;
     }
@@ -179,8 +203,7 @@ public class RaceTracker {
     }
 
     public int getPilotFrequency(int pilotIndex) {
-        String result = getConfig(Z_PILOT_FREQ_INDEX+pilotIndex);
-        String bandChannel = getValue(result);
+        String bandChannel = getConfig(Z_PILOT_FREQ_INDEX+pilotIndex);
         String band = bandChannel.substring(0, 1);
         int channelIndex = Integer.parseInt(bandChannel.substring(1, 2)) - 1;
         int freq;
@@ -202,31 +225,7 @@ public class RaceTracker {
     }
 
     private String getConfig(int index) {
-        String cmd = CONFIG + " " + index;
-        String returnValue = null;
-        for(int i=0; returnValue == null && i<RETRIES; i++) {
-            String result = send(cmd);
-            int pos = result.indexOf(':');
-            int returnIndex = Integer.parseInt(result.substring(0, pos));
-            if(returnIndex == index) {
-                returnValue = result.substring(pos + 1).trim();
-            }
-        }
-
-        if(returnValue == null) {
-            throw new BleException(String.format("Failed to read '%s' after %d retries", cmd, RETRIES));
-        }
-
-        return returnValue;
-    }
-
-    private static String getValue(String result) {
-        int pos = result.indexOf(':');
-        if(pos != -1) {
-            return result.substring(pos+1).trim();
-        } else {
-            return result;
-        }
+        return readValue(CONFIG + " " + index, String.valueOf(index));
     }
 
     private static UUID createUUID16(String s) {
