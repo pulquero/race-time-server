@@ -5,11 +5,14 @@ const io = require('socket.io')(server);
 const W3CWebSocket = require('websocket').w3cwebsocket;
 
 if(process.argv.length != 3) {
-	console.log('Missing argument <ip:port>');
+	console.log('Missing argument <ip[:port]>');
 	return;
 }
 
 let targetAddr = process.argv[2];
+if(targetAddr.lastIndexOf(':') == -1) {
+	targetAddr = targetAddr+':5001';
+}
 
 io.on('connection', (socket) => {
 	console.log('Connection from '+socket.handshake.address);
@@ -78,7 +81,7 @@ io.on('connection', (socket) => {
 
 	const forward = (req) => {
 		const l = (data) => {
-			console.log('Request: '+req)
+			console.log('Request: '+req+' '+data)
 			requestQueue.push({'event': req, 'data': data});
 			processRequests();
 		};

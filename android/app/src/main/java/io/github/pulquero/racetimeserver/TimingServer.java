@@ -2,6 +2,8 @@ package io.github.pulquero.racetimeserver;
 
 import android.util.Log;
 
+import com.jakewharton.rxrelay2.BehaviorRelay;
+
 import org.java_websocket.WebSocket;
 import org.java_websocket.exceptions.WebsocketNotConnectedException;
 import org.java_websocket.handshake.ClientHandshake;
@@ -11,52 +13,69 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.IOException;
+import java.net.Inet4Address;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.NetworkInterface;
+import java.util.Enumeration;
 import java.util.Iterator;
 import java.util.Timer;
 import java.util.TimerTask;
 
+import io.reactivex.Observable;
+
 public class TimingServer extends WebSocketServer {
     private static final int PORT = 5001;
-    private static final String LOG_TAG = "Timing";
+    private static final String LOG_TAG = "TimingServer";
     private static final int MAJOR_VERSION = 0;
     private static final int MINOR_VERSION = 1;
 
+    enum State {
+        STARTED, CONNECTED, STOPPED
+    }
+
+    private final BehaviorRelay<State> stateSubject = BehaviorRelay.create();
     private final RaceTracker raceTracker;
-    private final Listener listener;
     private Timer timer;
     private TimerTask heartbeat;
 
-    interface Listener {
-        void onConnect();
-        void onDisconnect();
+    public TimingServer(RaceTracker raceTracker) {
+        super(new InetSocketAddress(PORT), 1);
+        this.raceTracker = raceTracker;
+        stateSubject.accept(State.STOPPED);
     }
 
-    public TimingServer(RaceTracker raceTracker, Listener listener) {
-        super(new InetSocketAddress(PORT));
-        this.raceTracker = raceTracker;
-        this.listener = listener;
+    public Observable<State> observeState() {
+        return stateSubject.skip(1);
+    }
+
+    public State getState() {
+        return stateSubject.getValue();
     }
 
     @Override
     public void start() {
-        timer = new Timer();
         super.start();
+        timer = new Timer("Timing server heartbeat",true);
     }
 
-    public void stop() throws IOException, InterruptedException {
-        super.stop();
+    public void stop() {
+        try {
+            super.stop();
+        } catch (IOException | InterruptedException e) {
+        }
         timer.cancel();
         timer = null;
+        stateSubject.accept(State.STOPPED);
     }
 
     @Override
     public void onStart() {
+        stateSubject.accept(State.STARTED);
     }
 
     @Override
     public void onOpen(WebSocket conn, ClientHandshake handshake) {
-        listener.onConnect();
         heartbeat = new TimerTask() {
             @Override
             public void run() {
@@ -69,18 +88,21 @@ public class TimingServer extends WebSocketServer {
                 }
             }
         };
-        timer.schedule(heartbeat, 100, 500);
+        timer.schedule(heartbeat, 5000, 2500);
+        stateSubject.accept(State.CONNECTED);
     }
 
     @Override
     public void onClose(WebSocket conn, int code, String reason, boolean remote) {
         heartbeat.cancel();
         heartbeat = null;
-        listener.onDisconnect();
+        if(getConnections().isEmpty()) {
+            stateSubject.accept(State.STARTED);
+        }
     }
 
     @Override
-    public synchronized void onMessage(WebSocket conn, String message) {
+    public void onMessage(WebSocket conn, String message) {
         try {
             if(message.charAt(0) == '{') {
                 set(new JSONObject(message));
@@ -117,8 +139,9 @@ public class TimingServer extends WebSocketServer {
         try {
             int nodeCount = raceTracker.getPilotCount();
             for (int i = 0; i < nodeCount; i++) {
+                int freq = raceTracker.getPilotFrequency(i);
                 JSONObject nodeJson = new JSONObject();
-                nodeJson.put("frequency", 5800);
+                nodeJson.put("frequency", freq);
                 nodeJson.put("trigger_rssi", 32);
                 nodesJson.put(nodeJson);
             }
@@ -140,13 +163,19 @@ public class TimingServer extends WebSocketServer {
         return json;
     }
 
-    private void set(JSONObject json) {
-        for(Iterator<String> iter = json.keys(); iter.hasNext(); ) {
-            String key = iter.next();
+    private void set(JSONObject json) throws JSONException {
+        int node = json.optInt("node", -1);
+        if(node != -1) {
+            int freq = json.getInt("frequency");
+            raceTracker.setPilotFrequency(node, freq);
+        } else {
+            for (Iterator<String> iter = json.keys(); iter.hasNext(); ) {
+                String key = iter.next();
+            }
         }
     }
 
-    private synchronized void sendHeartbeat(WebSocket conn) throws JSONException {
+    private void sendHeartbeat(WebSocket conn) throws JSONException {
         JSONArray rssiJson = new JSONArray();
         int nodeCount = raceTracker.getPilotCount();
         for (int i = 0; i < nodeCount; i++) {
@@ -154,16 +183,16 @@ public class TimingServer extends WebSocketServer {
         }
         JSONObject json = new JSONObject();
         json.put("current_rssi", rssiJson);
-        String notif = createNotification("heartbeat", json);
-        conn.send(notif);
+        String notification = createNotification("heartbeat", json);
+        conn.send(notification);
     }
 
-    public synchronized void sendPass(WebSocket conn) throws JSONException {
+    public void sendPass(WebSocket conn) throws JSONException {
         JSONObject json = getTimestamp();
         json.put("node", 0);
         json.put("frequency", 5801);
-        String notif = createNotification("pass_record", json);
-        conn.send(notif);
+        String notification = createNotification("pass_record", json);
+        conn.send(notification);
     }
 
     private String createNotification(String type, JSONObject data) throws JSONException {
@@ -176,5 +205,29 @@ public class TimingServer extends WebSocketServer {
     @Override
     public void onError(WebSocket conn, Exception ex) {
         Log.e(LOG_TAG, "WebSocket error", ex);
+    }
+
+
+    public static String getNetworkAddress() {
+        try {
+            Enumeration<NetworkInterface> intfIter = NetworkInterface.getNetworkInterfaces();
+            if (intfIter == null) {
+                return "No network interface - permissions?";
+            }
+            while (intfIter.hasMoreElements()) {
+                NetworkInterface intf = intfIter.nextElement();
+                if (intf.isUp() && !intf.isLoopback()) {
+                    for (Enumeration<InetAddress> addrIter = intf.getInetAddresses(); addrIter.hasMoreElements(); ) {
+                        InetAddress addr = addrIter.nextElement();
+                        if (!addr.isLoopbackAddress() && (addr instanceof Inet4Address)) {
+                            return addr.getHostAddress();
+                        }
+                    }
+                }
+            }
+        } catch (IOException e) {
+            Log.e(LOG_TAG, "Get network address", e);
+        }
+        return "No IP address";
     }
 }

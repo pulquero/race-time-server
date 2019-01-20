@@ -1,29 +1,30 @@
 package io.github.pulquero.racetimeserver;
 
+import android.content.ComponentName;
+import android.content.Context;
+import android.content.Intent;
+import android.content.ServiceConnection;
 import android.graphics.Color;
 import android.os.Bundle;
+import android.os.IBinder;
 import android.util.Log;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.TextView;
+import android.widget.Toast;
 
-import com.polidea.rxandroidble2.RxBleDevice;
-
-import java.io.IOException;
-import java.net.Inet4Address;
-import java.net.InetAddress;
-import java.net.NetworkInterface;
-import java.util.Enumeration;
+import com.polidea.rxandroidble2.RxBleConnection;
 
 import androidx.appcompat.app.AppCompatActivity;
 import butterknife.BindView;
 import butterknife.ButterKnife;
 import butterknife.OnClick;
 import io.reactivex.android.schedulers.AndroidSchedulers;
+import io.reactivex.disposables.Disposable;
 
 public class ServerActivity extends AppCompatActivity {
     static final String MAC_ADDRESS_EXTRA = "macAddress";
-    private static final String SERVER_TAG = "Server";
+    private static final String LOG_TAG = "ServerActivity";
 
     @BindView(R.id.bluetoothAddress)
     TextView bluetoothAddressView;
@@ -38,92 +39,68 @@ public class ServerActivity extends AppCompatActivity {
     @BindView(R.id.response)
     TextView responseView;
 
-    private RaceTracker raceTracker;
-    private TimingServer timingServer;
+    private Intent raceTimeServiceIntent;
+    private RaceTimeService raceTimeService;
+    private Disposable btConnStateDisposable;
+    private Disposable netStateDisposable;
+    private Disposable commandDisposable;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_server);
         ButterKnife.bind(this);
-        String btAddr = getIntent().getStringExtra(MAC_ADDRESS_EXTRA);
-        bluetoothAddressView.setText(btAddr);
-        RxBleDevice device = RaceTracker.getRxBleClient(this).getBleDevice(btAddr);
-        device.observeConnectionStateChanges()
-                .observeOn(AndroidSchedulers.mainThread())
-                .subscribe(state -> {
-                    switch(state) {
-                        case CONNECTING:
-                            bluetoothAddressView.setTextColor(0xFF008800);
-                            break;
-                        case CONNECTED:
-                            bluetoothAddressView.setTextColor(Color.GREEN);
-                            break;
-                        case DISCONNECTING:
-                            bluetoothAddressView.setTextColor(Color.GRAY);
-                            break;
-                        case DISCONNECTED:
-                            bluetoothAddressView.setTextColor(Color.BLACK);
-                            break;
-                    }
-                },
-                ex -> {
-                    Log.e(SERVER_TAG, "Bluetooth connection status", ex);
-                    bluetoothAddressView.setTextColor(Color.RED);
-                }
+        raceTimeServiceIntent = new Intent(getApplicationContext(), RaceTimeService.class);
+        networkAddressView.setText(TimingServer.getNetworkAddress());
+    }
 
-        );
-        raceTracker = new RaceTracker(device);
-        networkAddressView.setText(getNetworkAddress());
+    protected void onStart() {
+        super.onStart();
+        bindService(raceTimeServiceIntent, serviceConnection, Context.BIND_AUTO_CREATE | Context.BIND_ABOVE_CLIENT | Context.BIND_IMPORTANT);
+    }
+
+    protected void onStop() {
+        super.onStop();
+        if(commandDisposable != null) {
+            commandDisposable.dispose();
+            commandDisposable = null;
+        }
+        unbindService(serviceConnection);
     }
 
     @OnClick(R.id.server)
     public void onServerToggleClick() {
-        if(isRunning()) {
-            try {
-                timingServer.stop();
-                timingServer = null;
-            } catch (IOException | InterruptedException e) {
-                Log.w(SERVER_TAG, "Stop server", e);
-            }
+        serverToggleButton.setEnabled(false);
+        if(raceTimeService.inUse()) {
+            raceTimeService.getTimingServer().stop();
+            stopMonitoringConnectionState();
+            stopService(raceTimeServiceIntent);
+            raceTimeService.restartTimingService();
+            updateNetworkAddressView(raceTimeService.getTimingServer().getState(), null);
+            updateServerToggleButton();
+            startMonitoringConnectionState();
         } else {
-            timingServer = new TimingServer(raceTracker, new TimingServer.Listener() {
-                @Override
-                public void onConnect() {
-                    networkAddressView.setTextColor(Color.GREEN);
-                }
-
-                @Override
-                public void onDisconnect() {
-                    networkAddressView.setTextColor(Color.BLACK);
-                }
-            });
-            timingServer.start();
+            startService(raceTimeServiceIntent);
+            raceTimeService.getTimingServer().start();
         }
-
-        updateButtonUIState();
-    }
-
-    private boolean isRunning() {
-        return (timingServer != null);
-    }
-
-    private void updateButtonUIState() {
-        serverToggleButton.setText(isRunning() ? R.string.stopServer : R.string.startServer);
     }
 
     @OnClick(R.id.send)
     public void onSendClick() {
         String cmd = commandText.getText().toString();
-        if(cmd != null && !cmd.isEmpty()) {
+        if(!cmd.isEmpty()) {
             commandText.setEnabled(false);
             sendButton.setEnabled(false);
             responseView.setText("");
-            raceTracker.sendAndObserve(commandText.getText().toString())
+            commandDisposable = raceTimeService.getRaceTracker().sendAndObserve(commandText.getText().toString())
                     .observeOn(AndroidSchedulers.mainThread())
                     .firstOrError()
                     .doFinally(() -> {
-                        commandText.setEnabled(true); sendButton.setEnabled(true);})
+                        commandDisposable.dispose();
+                        commandDisposable = null;
+                        commandText.setEnabled(true);
+                        sendButton.setEnabled(true);
+                    })
                     .subscribe(result -> {
                         responseView.setTextColor(Color.GRAY);
                         responseView.setText(result);
@@ -135,26 +112,104 @@ public class ServerActivity extends AppCompatActivity {
         }
     }
 
-    private static String getNetworkAddress() {
-        try {
-            Enumeration<NetworkInterface> intfIter = NetworkInterface.getNetworkInterfaces();
-            if (intfIter == null) {
-                return "No network interface - permissions?";
-            }
-            while (intfIter.hasMoreElements()) {
-                NetworkInterface intf = intfIter.nextElement();
-                if (intf.isUp() && !intf.isLoopback()) {
-                    for (Enumeration<InetAddress> addrIter = intf.getInetAddresses(); addrIter.hasMoreElements(); ) {
-                        InetAddress addr = addrIter.nextElement();
-                        if (!addr.isLoopbackAddress() && (addr instanceof Inet4Address)) {
-                            return addr.getHostAddress();
-                        }
-                    }
-                }
-            }
-        } catch (IOException e) {
-            Log.e(SERVER_TAG, "Get network address", e);
-        }
-        return "No IP address";
+    private void startMonitoringConnectionState() {
+        btConnStateDisposable = raceTimeService.getRaceTracker().observeConnectionState()
+                .observeOn(AndroidSchedulers.mainThread())
+                .subscribe(state -> updateBluetoothAddressView(state, null),
+                        ex -> {
+                            Log.e(LOG_TAG, "Bluetooth connection status", ex);
+                            updateBluetoothAddressView(null, ex);
+                        });
+        netStateDisposable = raceTimeService.getTimingServer().observeState()
+                .observeOn(AndroidSchedulers.mainThread())
+                .subscribe(state -> {
+                            updateNetworkAddressView(state,null);
+                            updateServerToggleButton();
+                        },
+                        ex -> {
+                            Log.e(LOG_TAG, "Network connection status", ex);
+                            updateNetworkAddressView(null, ex);
+                        });
     }
+
+    private void updateBluetoothAddressView(RxBleConnection.RxBleConnectionState state, Throwable err) {
+        bluetoothAddressView.setText(raceTimeService.getRaceTracker().getAddress());
+        if(err != null) {
+            bluetoothAddressView.setTextColor(Color.RED);
+        } else {
+            int color;
+            switch (state) {
+                case CONNECTING:
+                    color = 0xFF008800;
+                    break;
+                case CONNECTED:
+                    color = Color.GREEN;
+                    break;
+                case DISCONNECTING:
+                    color = Color.GRAY;
+                    break;
+                default:
+                    color = Color.BLACK;
+            }
+            bluetoothAddressView.setTextColor(color);
+        }
+    }
+
+    private void updateNetworkAddressView(TimingServer.State state, Throwable err) {
+        if(err != null) {
+            networkAddressView.setTextColor(Color.RED);
+        } else {
+            int color;
+            switch (state) {
+                case STARTED:
+                    color = 0xFF008800;
+                    break;
+                case CONNECTED:
+                    color = Color.GREEN;
+                    break;
+                default:
+                    color = Color.BLACK;
+            }
+            networkAddressView.setTextColor(color);
+        }
+    }
+
+    private void updateServerToggleButton() {
+        serverToggleButton.setEnabled(true);
+        serverToggleButton.setText(raceTimeService.inUse() ? R.string.stopServer : R.string.startServer);
+    }
+
+    private void stopMonitoringConnectionState() {
+        btConnStateDisposable.dispose();
+        btConnStateDisposable = null;
+        netStateDisposable.dispose();
+        netStateDisposable = null;
+    }
+
+    private final ServiceConnection serviceConnection = new ServiceConnection() {
+        @Override
+        public void onServiceConnected(ComponentName name, IBinder service) {
+            raceTimeService = ((RaceTimeService.LocalBinder)service).getService();
+            if(!raceTimeService.inUse()) {
+                String btAddress = getIntent().getStringExtra(MAC_ADDRESS_EXTRA);
+                raceTimeService.connect(getApplicationContext(), btAddress);
+            } else {
+                Toast.makeText(ServerActivity.this, R.string.isRunning, Toast.LENGTH_SHORT);
+            }
+
+            updateBluetoothAddressView(raceTimeService.getRaceTracker().getConnectionState(), null);
+            updateNetworkAddressView(raceTimeService.getTimingServer().getState(), null);
+            updateServerToggleButton();
+            startMonitoringConnectionState();
+        }
+
+        @Override
+        public void onServiceDisconnected(ComponentName name) {
+            stopMonitoringConnectionState();
+            if(!raceTimeService.inUse()) {
+                raceTimeService.disconnect();
+            }
+            raceTimeService = null;
+        }
+    };
 }

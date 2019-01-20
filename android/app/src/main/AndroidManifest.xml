@@ -25,10 +25,7 @@
             android:parentActivityName=".ScanActivity" />
 
         <service
-            android:name=".RaceTimeService"
-            android:enabled="true"
-            android:exported="true"
-            android:description="@string/app_name" />
+            android:name=".RaceTimeService"/>
     </application>
 
 </manifest>

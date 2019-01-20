@@ -26,7 +26,7 @@ import io.reactivex.schedulers.Schedulers;
 
 public class ScanActivity extends AppCompatActivity {
     private static final int REQUEST_ENABLE_BT = 1;
-    private static final String LOG_TAG = "SCAN";
+    private static final String LOG_TAG = "ScanActivity";
 
     @BindView(R.id.scan)
     Button scanToggleButton;
@@ -61,7 +61,7 @@ public class ScanActivity extends AppCompatActivity {
     @OnClick(R.id.scan)
     public void onScanToggleClick() {
         if (isScanning()) {
-            scanDisposable.dispose();
+            stopScanning();
         } else {
             if(!ensureBluetoothOn()) {
                 return;
@@ -92,7 +92,9 @@ public class ScanActivity extends AppCompatActivity {
     @Override
     public void onPause() {
         super.onPause();
-        stopScanning();
+        if (isScanning()) {
+            stopScanning();
+        }
     }
 
     private boolean isScanning() {
@@ -100,9 +102,8 @@ public class ScanActivity extends AppCompatActivity {
     }
 
     private void stopScanning() {
-        if (isScanning()) {
-            scanDisposable.dispose();
-        }
+        scanDisposable.dispose();
+        scanDisposable = null;
     }
 
     private void doConnect(String macAddress) {
@@ -117,7 +118,7 @@ public class ScanActivity extends AppCompatActivity {
     }
 
     private void dispose() {
-        scanDisposable = null;
+        stopScanning();
         updateButtonUIState();
     }
 

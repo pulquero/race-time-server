@@ -4,7 +4,9 @@ import android.content.Context;
 import android.os.ParcelUuid;
 
 import com.polidea.rxandroidble2.RxBleClient;
+import com.polidea.rxandroidble2.RxBleConnection;
 import com.polidea.rxandroidble2.RxBleDevice;
+import com.polidea.rxandroidble2.exceptions.BleException;
 
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
@@ -17,6 +19,7 @@ public class RaceTracker {
     private static final UUID WRITE_UUID = createUUID16("FFF1");
     private static final UUID READ_UUID = createUUID16("FFF2");
     private static final int MTU = 16;
+    private static final int RETRIES = 3;
 
     private static final String BATTERY = "B";
     /**
@@ -47,6 +50,7 @@ public class RaceTracker {
      * 32 = Pilot 8 band-channel
      */
     private static final String CONFIG = "Z";
+    private static final int Z_PILOT_FREQ_INDEX = 25;
 
     private static final String STOP_RACE = "0";
     private static final String START_RACE1 = "1";
@@ -62,13 +66,21 @@ public class RaceTracker {
     private static final String BAND_E = "E";
     private static final String BAND_F = "F";
 
+    private static final String UNASSIGNED_PILOT = "FF";
+
+    private static final short[] BAND_A_FREQS = {5865, 5845, 5825, 5805, 5785, 5765, 5745, 5725};
+    private static final short[] BAND_B_FREQS = {5733, 5752, 5771, 5790, 5809, 5828, 5847, 5866};
+    private static final short[] BAND_C_FREQS = {5658, 5695, 5732, 5769, 5806, 5843, 5880, 5917};
+    private static final short[] BAND_E_FREQS = {5705, 5685, 5665, 5645, 5885, 5905, 5925, 5945};
+    private static final short[] BAND_F_FREQS = {5740, 5760, 5780, 5800, 5820, 5840, 5860, 5880};
+
     private static volatile RxBleClient rxBleClient;
 
-    public static RxBleClient getRxBleClient(Context context) {
+    public static RxBleClient getRxBleClient(Context appContext) {
         if(rxBleClient == null) {
             synchronized (RaceTracker.class) {
                 if(rxBleClient == null) {
-                    rxBleClient = RxBleClient.create(context.getApplicationContext());
+                    rxBleClient = RxBleClient.create(appContext);
                 }
             }
         }
@@ -78,14 +90,31 @@ public class RaceTracker {
 
 
     private final RxBleDevice device;
+    private int pilotCount;
 
-    public RaceTracker(RxBleDevice device) {
-        this.device = device;
+    public RaceTracker(Context appContext, String btAddress) {
+        this.device = getRxBleClient(appContext).getBleDevice(btAddress);
+    }
+
+    public String getAddress() {
+        return device.getMacAddress();
+    }
+
+    public Observable<RxBleConnection.RxBleConnectionState> observeConnectionState() {
+        return device.observeConnectionStateChanges();
+    }
+
+    public RxBleConnection.RxBleConnectionState getConnectionState() {
+        return device.getConnectionState();
     }
 
     public Observable<String> sendAndObserve(String cmd) {
         if(cmd.length() + 1 > MTU) { // including null terminator
             throw new IllegalArgumentException("Invalid command - too long");
+        }
+
+        if(cmd.startsWith(PILOTS)) {
+            pilotCount = 0;
         }
 
         return device.establishConnection(false)
@@ -119,8 +148,76 @@ public class RaceTracker {
     }
 
     public int getPilotCount() {
-        String result = send(PILOTS);
-        return Integer.parseInt(getValue(result));
+        if(pilotCount == 0) {
+            String result = send(PILOTS);
+            pilotCount = Integer.parseInt(getValue(result));
+        }
+        return pilotCount;
+    }
+
+    public void setPilotFrequency(int pilotIndex, int freq) {
+        String bandChannel = null;
+        if(freq != 0) {
+            short[][] table = {BAND_C_FREQS, BAND_A_FREQS, BAND_B_FREQS, BAND_E_FREQS, BAND_F_FREQS};
+            String[] bands = {BAND_C, BAND_A, BAND_B, BAND_E, BAND_F};
+            find: for(int i=0; i<table.length; i++) {
+                short[] freqs = table[i];
+                for(int j=0; j<freqs.length; j++) {
+                    if(freqs[j] == freq) {
+                        bandChannel = bands[i] + (j+1);
+                        break find;
+                    }
+                }
+            }
+        } else {
+            bandChannel = UNASSIGNED_PILOT;
+        }
+
+        if(bandChannel != null) {
+            send(PILOTS + " " + (pilotIndex+1) + " " + bandChannel);
+        }
+    }
+
+    public int getPilotFrequency(int pilotIndex) {
+        String result = getConfig(Z_PILOT_FREQ_INDEX+pilotIndex);
+        String bandChannel = getValue(result);
+        String band = bandChannel.substring(0, 1);
+        int channelIndex = Integer.parseInt(bandChannel.substring(1, 2)) - 1;
+        int freq;
+        switch(band) {
+            case BAND_C: freq = BAND_C_FREQS[channelIndex];
+                break;
+            case BAND_A: freq = BAND_A_FREQS[channelIndex];
+                break;
+            case BAND_B: freq = BAND_B_FREQS[channelIndex];
+                break;
+            case BAND_E: freq = BAND_E_FREQS[channelIndex];
+                break;
+            case BAND_F: freq = BAND_F_FREQS[channelIndex];
+                break;
+            default:
+                freq = 0;
+        }
+        return freq;
+    }
+
+    private String getConfig(int index) {
+        String cmd = CONFIG + " " + index;
+        String returnValue = null;
+        for(int i=0; returnValue == null && i<RETRIES; i++) {
+            String result = send(cmd);
+            int pos = result.indexOf(':');
+            int returnIndex = Integer.parseInt(result.substring(0, pos));
+            if(returnIndex == index) {
+                returnValue = result.substring(pos + 1).trim();
+            }
+        }
+
+        if(returnValue == null) {
+            throw new BleException(String.format("Failed to read '%s' after %d retries", cmd, RETRIES));
+        }
+
+        return returnValue;
     }
 
     private static String getValue(String result) {
