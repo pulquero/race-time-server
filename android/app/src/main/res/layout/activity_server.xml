@@ -34,7 +34,7 @@
 
     <EditText
         android:id="@+id/command"
-        android:layout_width="176dp"
+        android:layout_width="176sp"
         android:layout_height="wrap_content"
         android:layout_marginStart="8dp"
         android:layout_marginTop="8dp"
@@ -58,9 +58,11 @@
 
     <TextView
         android:id="@+id/response"
-        android:layout_width="wrap_content"
+        android:layout_width="176sp"
         android:layout_height="wrap_content"
         android:layout_marginStart="8dp"
+        android:layout_marginEnd="8dp"
+        android:maxLength="16"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@id/send" />
 

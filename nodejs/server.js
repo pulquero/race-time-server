@@ -58,7 +58,6 @@ io.on('connection', (socket) => {
 
 			client.onclose = () => {
 				console.log('Disconnected from '+targetAddr);
-				Object.entries(listeners).forEach(([evt,l]) => {socket.off(evt, l);});
 				client = null;
 				processRequests();
 			};

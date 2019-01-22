@@ -23,12 +23,19 @@ import java.util.Timer;
 import java.util.TimerTask;
 
 import io.reactivex.Observable;
+import io.reactivex.disposables.Disposable;
 
 public class TimingServer extends WebSocketServer {
     private static final int PORT = 5001;
     private static final String LOG_TAG = "TimingServer";
     private static final int MAJOR_VERSION = 0;
     private static final int MINOR_VERSION = 1;
+    private static final String CALIBRATION_THRESHOLD = "calibration_threshold";
+    private static final String CALIBRATION_OFFSET = "calibration_offset";
+    private static final String TRIGGER_THRESHOLD = "trigger_threshold";
+    private static final String FREQUENCY = "frequency";
+    private static final String NODE = "node";
+    private static final String TIMESTAMP = "timestamp";
 
     enum State {
         STARTED, CONNECTED, STOPPED
@@ -37,7 +44,6 @@ public class TimingServer extends WebSocketServer {
     private final BehaviorRelay<State> stateSubject = BehaviorRelay.create();
     private final RaceTracker raceTracker;
     private Timer timer;
-    private TimerTask heartbeat;
 
     public TimingServer(RaceTracker raceTracker) {
         super(new InetSocketAddress(PORT), 1);
@@ -76,26 +82,23 @@ public class TimingServer extends WebSocketServer {
 
     @Override
     public void onOpen(WebSocket conn, ClientHandshake handshake) {
-        heartbeat = new TimerTask() {
-            @Override
-            public void run() {
-                try {
-                    sendHeartbeat(conn);
-                } catch (WebsocketNotConnectedException e) {
-                    cancel();
-                } catch (Exception e) {
-                    Log.w(LOG_TAG, "heartbeat", e);
-                }
-            }
-        };
-        timer.schedule(heartbeat, 5000, 2500);
+        AttachmentData attachmentData = new AttachmentData();
+        conn.setAttachment(attachmentData);
+
+        attachmentData.heartbeat = new HeartbeatTask(conn);
+        timer.schedule(attachmentData.heartbeat, 5000, 2500);
         stateSubject.accept(State.CONNECTED);
     }
 
     @Override
     public void onClose(WebSocket conn, int code, String reason, boolean remote) {
-        heartbeat.cancel();
-        heartbeat = null;
+        AttachmentData attachmentData = conn.getAttachment();
+        if(attachmentData != null) {
+            conn.setAttachment(null);
+            attachmentData.stopHeartbeat();
+            attachmentData.unsubscribeFromRace();
+        }
+
         if(getConnections().isEmpty()) {
             stateSubject.accept(State.STARTED);
         }
@@ -105,7 +108,7 @@ public class TimingServer extends WebSocketServer {
     public void onMessage(WebSocket conn, String message) {
         try {
             if(message.charAt(0) == '{') {
-                set(new JSONObject(message));
+                set(conn, new JSONObject(message));
             } else {
                 JSONObject result = get(message);
                 if (result != null) {
@@ -136,41 +139,69 @@ public class TimingServer extends WebSocketServer {
 
     private JSONObject getSettings() throws JSONException {
         JSONArray nodesJson = new JSONArray();
+        int nodeCount;
         try {
-            int nodeCount = raceTracker.getPilotCount();
-            for (int i = 0; i < nodeCount; i++) {
-                int freq = raceTracker.getPilotFrequency(i);
-                JSONObject nodeJson = new JSONObject();
-                nodeJson.put("frequency", freq);
-                nodeJson.put("trigger_rssi", 32);
-                nodesJson.put(nodeJson);
-            }
+            nodeCount = raceTracker.getPilotCount();
         } catch(Exception e) {
-            Log.w(LOG_TAG,"settings", e);
+            Log.w(LOG_TAG,"settings - pilot count", e);
+            nodeCount = 0;
+        }
+        for (int i = 0; i < nodeCount; i++) {
+            int freq;
+            try {
+                freq = raceTracker.getPilotFrequency(i);
+            } catch (Exception e) {
+                Log.w(LOG_TAG,"settings - pilot frequency", e);
+                freq = 0;
+            }
+            JSONObject nodeJson = new JSONObject();
+            nodeJson.put(FREQUENCY, freq);
+            nodeJson.put("trigger_rssi", 32);
+            nodesJson.put(nodeJson);
         }
 
         JSONObject json = new JSONObject();
         json.put("nodes", nodesJson);
-        json.put("calibration_threshold", 2);
-        json.put("calibration_offset", 3);
-        json.put("trigger_threshold", 4);
+        json.put(CALIBRATION_THRESHOLD, 2);
+        json.put(CALIBRATION_OFFSET, 3);
+        json.put(TRIGGER_THRESHOLD, 4);
         return json;
     }
 
     private JSONObject getTimestamp() throws JSONException {
         JSONObject json = new JSONObject();
-        json.put("timestamp", System.currentTimeMillis());
+        json.put(TIMESTAMP, 0);
         return json;
     }
 
-    private void set(JSONObject json) throws JSONException {
-        int node = json.optInt("node", -1);
-        if(node != -1) {
-            int freq = json.getInt("frequency");
-            raceTracker.setPilotFrequency(node, freq);
+    private void set(WebSocket conn, JSONObject json) throws JSONException {
+        if(json.has(NODE)) {
+            int node = json.getInt(NODE);
+            if(node != -1) {
+                int freq = json.getInt(FREQUENCY);
+                raceTracker.setPilotFrequency(node, freq);
+            } else {
+                AttachmentData attachmentData = conn.getAttachment();
+                attachmentData.unsubscribeFromRace();
+                raceTracker.stopRace();
+                attachmentData.raceDisposable = raceTracker.startRace(RaceTracker.SHOTGUN_RACE).subscribe(
+                    pass -> {
+                        sendPass(conn, pass.pilot, pass.ts);
+                    },
+                    ex -> Log.e(LOG_TAG, "Lap notification", ex)
+                );
+            }
         } else {
             for (Iterator<String> iter = json.keys(); iter.hasNext(); ) {
                 String key = iter.next();
+                switch(key) {
+                    case CALIBRATION_THRESHOLD:
+                        break;
+                    case CALIBRATION_OFFSET:
+                        break;
+                    case TRIGGER_THRESHOLD:
+                        break;
+                }
             }
         }
     }
@@ -179,7 +210,13 @@ public class TimingServer extends WebSocketServer {
         JSONArray rssiJson = new JSONArray();
         int nodeCount = raceTracker.getPilotCount();
         for (int i = 0; i < nodeCount; i++) {
-            rssiJson.put(34);
+            // rssi only available for the principal channel
+            if(i == 0) {
+                int rssi = -Math.round(raceTracker.getRssi());
+                rssiJson.put(rssi);
+            } else {
+                rssiJson.put(0);
+            }
         }
         JSONObject json = new JSONObject();
         json.put("current_rssi", rssiJson);
@@ -187,10 +224,11 @@ public class TimingServer extends WebSocketServer {
         conn.send(notification);
     }
 
-    public void sendPass(WebSocket conn) throws JSONException {
-        JSONObject json = getTimestamp();
-        json.put("node", 0);
-        json.put("frequency", 5801);
+    public void sendPass(WebSocket conn, int pilot, long ts) throws JSONException {
+        JSONObject json = new JSONObject();
+        json.put(TIMESTAMP, ts);
+        json.put(NODE, pilot);
+        json.put(FREQUENCY, raceTracker.getPilotFrequency(pilot));
         String notification = createNotification("pass_record", json);
         conn.send(notification);
     }
@@ -207,6 +245,43 @@ public class TimingServer extends WebSocketServer {
         Log.e(LOG_TAG, "WebSocket error", ex);
     }
 
+    final class HeartbeatTask extends TimerTask {
+        final WebSocket conn;
+
+        HeartbeatTask(WebSocket conn) {
+            this.conn = conn;
+        }
+
+        @Override
+        public void run() {
+            try {
+                sendHeartbeat(conn);
+            } catch (WebsocketNotConnectedException e) {
+                cancel();
+            } catch (Exception e) {
+                Log.w(LOG_TAG, "heartbeat", e);
+            }
+        }
+    }
+
+    static final class AttachmentData {
+        HeartbeatTask heartbeat;
+        Disposable raceDisposable;
+
+        void stopHeartbeat() {
+            if (heartbeat != null) {
+                heartbeat.cancel();
+                heartbeat = null;
+            }
+        }
+
+        void unsubscribeFromRace() {
+            if(raceDisposable != null) {
+                raceDisposable.dispose();
+                raceDisposable = null;
+            }
+        }
+    }
 
     public static String getNetworkAddress() {
         try {
