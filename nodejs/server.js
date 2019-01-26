@@ -56,8 +56,8 @@ io.on('connection', (socket) => {
 				}
 			};
 
-			client.onclose = () => {
-				console.log('Disconnected from '+targetAddr);
+			client.onclose = (e) => {
+				console.log('Disconnected from '+targetAddr+' ('+e.reason+')');
 				client = null;
 				processRequests();
 			};
@@ -99,21 +99,26 @@ io.on('connection', (socket) => {
 
 	forward('reset_auto_calibration');
 
-	socket.on('disconnect', (reason) => {
+	const onDisconnect = (reason) => {
 		console.log('Disconnected by '+socket.handshake.address);
+		Object.entries(listeners).forEach(([evt,l]) => {socket.off(evt, l);});
 		if(client) {
 			client.close();
 			client = null;
 		}
-	});
+	};
+	socket.on('disconnect', onDisconnect);
+	listeners['disconnect'] = onDisconnect;
 
-	socket.on('error', (error) => {
+	const onError = (error) => {
 		console.log('Connection error to '+socket.handshake.address);
 		if(client) {
 			client.close();
 			client = null;
 		}
-	});
+	};
+	socket.on('error', onError);
+	listeners['error'] = onError;
 });
 
 server.listen(5000);

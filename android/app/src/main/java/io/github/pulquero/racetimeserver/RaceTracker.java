@@ -2,8 +2,9 @@ package io.github.pulquero.racetimeserver;
 
 import android.content.Context;
 import android.os.ParcelUuid;
+import android.util.Log;
 
-import com.polidea.rxandroidble2.NotificationSetupMode;
+import com.jakewharton.rx.ReplayingShare;
 import com.polidea.rxandroidble2.RxBleClient;
 import com.polidea.rxandroidble2.RxBleConnection;
 import com.polidea.rxandroidble2.RxBleDevice;
@@ -12,8 +13,11 @@ import com.polidea.rxandroidble2.exceptions.BleException;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import io.reactivex.Observable;
+import io.reactivex.disposables.Disposable;
 import io.reactivex.functions.Predicate;
 import io.reactivex.internal.functions.Functions;
 import io.reactivex.schedulers.Schedulers;
@@ -23,7 +27,6 @@ public class RaceTracker {
     private static final UUID WRITE_UUID = createUUID16("FFF1");
     private static final UUID READ_UUID = createUUID16("FFF2");
     private static final int MAX_DATA_SIZE = 20;
-    private static final long WAIT_DELAY = 300L;
     private static final int RETRIES = 3;
     private static final int MAX_PILOTS = 8;
 
@@ -47,9 +50,11 @@ public class RaceTracker {
     private static final String PILOTS = "N";
     private static final String PILOTS_RESPONSE = "Racers";
     /**
-     * ${bandChannel},${rssi},${x}
+     * Will interrupt a race.
+     * ${bandChannel},${rssi}dbm,${x}
      */
     private static final String RSSI = "Q";
+    private static final Pattern RSSI_RESPONSE = Pattern.compile("([ABCEF][1-8]),(-?[0-9]+(\\.[0-9]+)?)dbm,(-?[0-9]+)");
     /**
      * R
      * Total Rounds:${lapCount}
@@ -81,6 +86,8 @@ public class RaceTracker {
     public static final int FLYOVER_RACE = 2;
     private static final String START_RACE3 = "3";
     private static final String READY = "READY";
+    private static final Pattern SINGLE_PILOT_LAP = Pattern.compile("R([0-9]+),T([0-9]+),([0-9]+)");
+    private static final Pattern MULTI_PILOT_LAP = Pattern.compile("P([0-9])R([0-9]+)T([0-9]+),([0-9]+)");
 
     private static final String BAND_A = "A";
     private static final String BAND_B = "B";
@@ -99,6 +106,8 @@ public class RaceTracker {
     private static final short[] BAND_E_FREQS = {5705, 5685, 5665, 5645, 5885, 5905, 5925, 5945};
     private static final short[] BAND_F_FREQS = {5740, 5760, 5780, 5800, 5820, 5840, 5860, 5880};
 
+    private static final String LOG_TAG = "RaceTracker";
+
     private static volatile RxBleClient rxBleClient;
 
     public static RxBleClient getRxBleClient(Context appContext) {
@@ -116,6 +125,8 @@ public class RaceTracker {
 
     private final short[] pilotFreqs = new short[MAX_PILOTS];
     private final RxBleDevice device;
+    private Observable<RxBleConnection> conn;
+    private Disposable connDisposable;
     private int pilotCount;
 
     public RaceTracker(Context appContext, String btAddress) {
@@ -127,11 +138,23 @@ public class RaceTracker {
     }
 
     public Observable<RxBleConnection.RxBleConnectionState> observeConnectionState() {
-        return device.observeConnectionStateChanges();
+        return device.observeConnectionStateChanges().subscribeOn(Schedulers.io());
     }
 
     public RxBleConnection.RxBleConnectionState getConnectionState() {
         return device.getConnectionState();
+    }
+
+    public void connect() {
+        conn = device.establishConnection(false).subscribeOn(Schedulers.io()).compose(ReplayingShare.instance());
+        // establish connection
+        connDisposable = conn.subscribe();
+    }
+
+    public void disconnect() {
+        connDisposable.dispose();
+        connDisposable = null;
+        conn = null;
     }
 
     public Observable<String> sendAndObserve(String cmd) {
@@ -144,15 +167,12 @@ public class RaceTracker {
             Arrays.fill(pilotFreqs, (short) 0);
         }
 
-        return device.establishConnection(false)
-            .subscribeOn(Schedulers.io())
-            .doOnNext(RaceTracker::waitUntilDeviceReady)
+        return conn.subscribeOn(Schedulers.io())
             .flatMapSingle(
-                    conn -> conn.writeCharacteristic(WRITE_UUID, toBytes(cmd))
-                                .doOnSuccess(RaceTracker::waitUntilDeviceReady)
-                                .flatMap(writtenSZ -> conn.readCharacteristic(READ_UUID))
+                    conn -> conn.writeCharacteristic(WRITE_UUID, stringToBytes(cmd)).subscribeOn(Schedulers.io())
+                                .flatMap(writtenSZ -> conn.readCharacteristic(READ_UUID).subscribeOn(Schedulers.io()))
                     )
-            .map(RaceTracker::toString)
+            .map(RaceTracker::bytesToString)
             .observeOn(Schedulers.io());
     }
 
@@ -166,8 +186,10 @@ public class RaceTracker {
             try {
                 String result = send(cmd);
                 if (isExpectedResponse.test(result)) {
+                    Log.d(LOG_TAG, String.format("Expected response '%s' for command '%s' received on attempt %d/%d", result, cmd, i+1, RETRIES));
                     return result;
                 }
+                Log.d(LOG_TAG, String.format("Unexpected response '%s' for command '%s' received on attempt %d/%d", result, cmd, i+1, RETRIES));
             } catch(BleException ex) {
                 exception = ex;
             } catch(RuntimeException ex) {
@@ -187,17 +209,23 @@ public class RaceTracker {
     private String readValue(String cmd, String expectedResponse) {
         String result = send(cmd, read -> {
             int pos = read.indexOf(':');
-            String returnedResponse = read.substring(0, pos);
-            return expectedResponse.equals(returnedResponse);
+            if(pos != -1) {
+                String returnedResponse = read.substring(0, pos);
+                return expectedResponse.equals(returnedResponse);
+            } else {
+                return false;
+            }
         });
         int pos = result.indexOf(':');
         return result.substring(pos + 1).trim();
     }
 
-    public float getRssi() {
-        String result = send(RSSI);
-        String[] parts = result.split(",", -1);
-        return Float.parseFloat(parts[1].substring(0, parts[1].length()-"dbm".length()));
+    public int getRssi() {
+        String result = send(RSSI, s -> RSSI_RESPONSE.matcher(s).matches());
+        Matcher matcher = RSSI_RESPONSE.matcher(result);
+        matcher.matches();
+        int rssi = Integer.parseInt(matcher.group(3));
+        return (rssi != -1) ? rssi+82 : 0;
     }
 
     public int getPilotCount() {
@@ -270,35 +298,37 @@ public class RaceTracker {
     }
 
     public Observable<LapNotification> startRace(int mode) {
-        send(String.valueOf(mode), read -> READY.equals(read));
-        try {
-            RaceTracker.waitUntilDeviceReady(null);
-        } catch (InterruptedException e) {
-        }
-
-        return device.establishConnection(false)
-                .subscribeOn(Schedulers.io())
-                .doOnNext(RaceTracker::waitUntilDeviceReady)
-                .flatMap(conn -> conn.setupNotification(READ_UUID, NotificationSetupMode.COMPAT))
+        return conn.subscribeOn(Schedulers.io())
+                .flatMap(conn ->
+                        conn.writeCharacteristic(WRITE_UUID, stringToBytes(RSSI)).subscribeOn(Schedulers.io())
+                        .flatMap(rssiWritten -> conn.readCharacteristic(READ_UUID).subscribeOn(Schedulers.io()))
+                        .flatMap(rssiRead -> conn.writeCharacteristic(WRITE_UUID, stringToBytes(String.valueOf(mode))).subscribeOn(Schedulers.io()))
+                        .flatMap(raceWritten -> conn.readCharacteristic(READ_UUID).subscribeOn(Schedulers.io()))
+                        .flatMapObservable(raceRead -> conn.setupNotification(READ_UUID).subscribeOn(Schedulers.io()))
+                )
                 .flatMap(Functions.identity())
-                .map(RaceTracker::toString)
+                .map(RaceTracker::bytesToString)
+                .filter(s -> SINGLE_PILOT_LAP.matcher(s).matches() || MULTI_PILOT_LAP.matcher(s).matches())
                 .map(s -> {
-                    String[] parts = s.split(",", -1);
                     int pilotIndex;
                     long ts;
-                    if(parts.length == 3) {
+                    Matcher matcher = SINGLE_PILOT_LAP.matcher(s);
+                    if(matcher.matches()) {
+                        // single pilot
                         pilotIndex = 0;
-                        ts = Long.parseLong(parts[2]);
+                        ts = Long.parseLong(matcher.group(3));
                     } else {
-                        pilotIndex = Integer.parseInt(parts[0].substring(1, 2)) - 1;
-                        ts = Long.parseLong(parts[1]);
+                        matcher = MULTI_PILOT_LAP.matcher(s);
+                        matcher.matches();
+                        pilotIndex = Integer.parseInt(matcher.group(1)) - 1;
+                        ts = Long.parseLong(matcher.group(4));
                     }
                     return new LapNotification(pilotIndex, ts);
                 })
                 .observeOn(Schedulers.io());
     }
 
-    private static String toString(byte[] sz) {
+    private static String bytesToString(byte[] sz) {
         // strip null terminator
         int endPos = 0;
         while(sz[endPos] != 0) {
@@ -307,16 +337,12 @@ public class RaceTracker {
         return new String(sz, 0, endPos, StandardCharsets.US_ASCII);
     }
 
-    private static byte[] toBytes(String str) {
+    private static byte[] stringToBytes(String str) {
         byte[] s = str.getBytes(StandardCharsets.US_ASCII);
         // add null terminator
         byte[] sz = new byte[MAX_DATA_SIZE];
         System.arraycopy(s, 0, sz, 0, s.length);
         return sz;
-    }
-
-    private static void waitUntilDeviceReady(Object o) throws InterruptedException {
-        Thread.sleep(WAIT_DELAY);
     }
 
     private static UUID createUUID16(String s) {

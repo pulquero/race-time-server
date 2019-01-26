@@ -24,6 +24,7 @@ import java.util.TimerTask;
 
 import io.reactivex.Observable;
 import io.reactivex.disposables.Disposable;
+import io.reactivex.schedulers.Schedulers;
 
 public class TimingServer extends WebSocketServer {
     private static final int PORT = 5001;
@@ -52,7 +53,7 @@ public class TimingServer extends WebSocketServer {
     }
 
     public Observable<State> observeState() {
-        return stateSubject.skip(1);
+        return stateSubject.subscribeOn(Schedulers.io()).skip(1);
     }
 
     public State getState() {
@@ -82,11 +83,8 @@ public class TimingServer extends WebSocketServer {
 
     @Override
     public void onOpen(WebSocket conn, ClientHandshake handshake) {
-        AttachmentData attachmentData = new AttachmentData();
-        conn.setAttachment(attachmentData);
-
-        attachmentData.heartbeat = new HeartbeatTask(conn);
-        timer.schedule(attachmentData.heartbeat, 5000, 2500);
+        conn.setAttachment(new AttachmentData());
+        ensureHeartbeat(conn);
         stateSubject.accept(State.CONNECTED);
     }
 
@@ -96,7 +94,7 @@ public class TimingServer extends WebSocketServer {
         if(attachmentData != null) {
             conn.setAttachment(null);
             attachmentData.stopHeartbeat();
-            attachmentData.unsubscribeFromRace();
+            attachmentData.stopRace(null);
         }
 
         if(getConnections().isEmpty()) {
@@ -108,9 +106,10 @@ public class TimingServer extends WebSocketServer {
     public void onMessage(WebSocket conn, String message) {
         try {
             if(message.charAt(0) == '{') {
+                // JSON object
                 set(conn, new JSONObject(message));
             } else {
-                JSONObject result = get(message);
+                JSONObject result = get(conn, message);
                 if (result != null) {
                     conn.send(result.toString());
                 }
@@ -121,10 +120,14 @@ public class TimingServer extends WebSocketServer {
         }
     }
 
-    private JSONObject get(String action) throws JSONException {
+    private JSONObject get(WebSocket conn, String action) throws JSONException {
         switch (action) {
-            case "get_version": return getVersion();
-            case "get_settings": return getSettings();
+            case "get_version":
+                ensureHeartbeat(conn);
+                return getVersion();
+            case "get_settings":
+                ensureHeartbeat(conn);
+                return getSettings();
             case "get_timestamp": return getTimestamp();
         }
         return null;
@@ -170,6 +173,7 @@ public class TimingServer extends WebSocketServer {
 
     private JSONObject getTimestamp() throws JSONException {
         JSONObject json = new JSONObject();
+        // race timer starts from 0
         json.put(TIMESTAMP, 0);
         return json;
     }
@@ -178,12 +182,15 @@ public class TimingServer extends WebSocketServer {
         if(json.has(NODE)) {
             int node = json.getInt(NODE);
             if(node != -1) {
+                ensureHeartbeat(conn);
                 int freq = json.getInt(FREQUENCY);
                 raceTracker.setPilotFrequency(node, freq);
             } else {
+                // closest thing to a start race message
+                // there is nothing equivalent to a stop race message besides any other message
                 AttachmentData attachmentData = conn.getAttachment();
-                attachmentData.unsubscribeFromRace();
-                raceTracker.stopRace();
+                attachmentData.stopHeartbeat();
+                attachmentData.stopRace(raceTracker);
                 attachmentData.raceDisposable = raceTracker.startRace(RaceTracker.SHOTGUN_RACE).subscribe(
                     pass -> {
                         sendPass(conn, pass.pilot, pass.ts);
@@ -192,6 +199,7 @@ public class TimingServer extends WebSocketServer {
                 );
             }
         } else {
+            ensureHeartbeat(conn);
             for (Iterator<String> iter = json.keys(); iter.hasNext(); ) {
                 String key = iter.next();
                 switch(key) {
@@ -206,13 +214,25 @@ public class TimingServer extends WebSocketServer {
         }
     }
 
+    private void ensureHeartbeat(WebSocket conn) {
+        // ensure any previous races are stopped
+        AttachmentData attachmentData = conn.getAttachment();
+        attachmentData.stopRace(raceTracker);
+
+        // start heartbeat if not already running
+        if(attachmentData.heartbeat == null) {
+            attachmentData.heartbeat = new HeartbeatTask(conn);
+            timer.schedule(attachmentData.heartbeat, 5000L, 15000L);
+        }
+    }
+
     private void sendHeartbeat(WebSocket conn) throws JSONException {
         JSONArray rssiJson = new JSONArray();
         int nodeCount = raceTracker.getPilotCount();
         for (int i = 0; i < nodeCount; i++) {
             // rssi only available for the principal channel
             if(i == 0) {
-                int rssi = -Math.round(raceTracker.getRssi());
+                int rssi = raceTracker.getRssi();
                 rssiJson.put(rssi);
             } else {
                 rssiJson.put(0);
@@ -275,10 +295,13 @@ public class TimingServer extends WebSocketServer {
             }
         }
 
-        void unsubscribeFromRace() {
+        void stopRace(RaceTracker raceTracker) {
             if(raceDisposable != null) {
                 raceDisposable.dispose();
                 raceDisposable = null;
+            }
+            if(raceTracker != null) {
+                raceTracker.stopRace();
             }
         }
     }

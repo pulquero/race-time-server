@@ -65,6 +65,13 @@ public class ServerActivity extends AppCompatActivity {
             commandDisposable.dispose();
             commandDisposable = null;
         }
+
+        stopMonitoringConnectionState();
+        if(!raceTimeService.inUse()) {
+            raceTimeService.disconnect();
+        }
+        raceTimeService = null;
+
         unbindService(serviceConnection);
     }
 
@@ -205,11 +212,6 @@ public class ServerActivity extends AppCompatActivity {
 
         @Override
         public void onServiceDisconnected(ComponentName name) {
-            stopMonitoringConnectionState();
-            if(!raceTimeService.inUse()) {
-                raceTimeService.disconnect();
-            }
-            raceTimeService = null;
         }
     };
 }

@@ -12,6 +12,7 @@ public class RaceTimeService extends Service {
 
     public void connect(Context appContext, String btAddress) {
         raceTracker = new RaceTracker(appContext, btAddress);
+        raceTracker.connect();
         timingServer = new TimingServer(raceTracker);
     }
 
@@ -33,6 +34,7 @@ public class RaceTimeService extends Service {
     }
 
     public void disconnect() {
+        raceTracker.disconnect();
         raceTracker = null;
         timingServer = null;
     }
