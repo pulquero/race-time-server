@@ -60,12 +60,18 @@ public class TimingServer extends WebSocketServer {
         return stateSubject.getValue();
     }
 
+    /**
+     * Returns immediately before the server has started.
+     */
     @Override
     public void start() {
         super.start();
         timer = new Timer("Timing server heartbeat",true);
     }
 
+    /**
+     * Returns when the server has stopped.
+     */
     public void stop() {
         try {
             super.stop();

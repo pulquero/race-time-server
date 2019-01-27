@@ -5,4 +5,9 @@
     <color name="colorAccent">#D81B60</color>
     <color name="connected">#00FF00</color>
     <color name="disconnected">#000000</color>
+    <color name="connecting">#008800</color>
+    <color name="disconnecting">#888888</color>
+    <color name="started">#008800</color>
+    <color name="responseText">#888888</color>
+    <color name="error">#FF0000</color>
 </resources>

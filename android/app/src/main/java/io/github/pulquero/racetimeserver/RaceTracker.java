@@ -148,7 +148,7 @@ public class RaceTracker {
     public void connect() {
         conn = device.establishConnection(false).subscribeOn(Schedulers.io()).compose(ReplayingShare.instance());
         // establish connection
-        connDisposable = conn.subscribe();
+        connDisposable = conn.subscribe(conn -> Log.i(LOG_TAG, "Connected"), ex -> Log.e(LOG_TAG, "Connection error"));
     }
 
     public void disconnect() {
@@ -157,7 +157,7 @@ public class RaceTracker {
         conn = null;
     }
 
-    public Observable<String> sendAndObserve(String cmd) {
+    public synchronized Observable<String> sendAndObserve(String cmd) {
         if(cmd.length() + 1 > MAX_DATA_SIZE) { // including null terminator
             throw new IllegalArgumentException("Invalid command - too long");
         }
@@ -224,8 +224,8 @@ public class RaceTracker {
         String result = send(RSSI, s -> RSSI_RESPONSE.matcher(s).matches());
         Matcher matcher = RSSI_RESPONSE.matcher(result);
         matcher.matches();
-        int rssi = Integer.parseInt(matcher.group(3));
-        return (rssi != -1) ? rssi+82 : 0;
+        float rssi = Float.parseFloat(matcher.group(2));
+        return Math.round(rssi)+123;
     }
 
     public int getPilotCount() {
@@ -297,7 +297,7 @@ public class RaceTracker {
         send(STOP_RACE);
     }
 
-    public Observable<LapNotification> startRace(int mode) {
+    public synchronized Observable<LapNotification> startRace(int mode) {
         return conn.subscribeOn(Schedulers.io())
                 .flatMap(conn ->
                         conn.writeCharacteristic(WRITE_UUID, stringToBytes(RSSI)).subscribeOn(Schedulers.io())
