@@ -1,5 +1,6 @@
 package io.github.pulquero.racetimeserver;
 
+import android.os.AsyncTask;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.LayoutInflater;
@@ -38,6 +39,10 @@ public class RaceTrackerFragment extends Fragment implements RaceTimeServiceSubs
     int errorColor;
     @BindView(R.id.bluetoothAddress)
     TextView bluetoothAddressView;
+    @BindView(R.id.calibration)
+    TextView calibrationView;
+    @BindView(R.id.calibrate)
+    Button calibrateButton;
     @BindView(R.id.command)
     EditText commandText;
     @BindView(R.id.send)
@@ -48,6 +53,7 @@ public class RaceTrackerFragment extends Fragment implements RaceTimeServiceSubs
     private RaceTimeService raceTimeService;
     private Disposable raceTimeServiceDisposable;
     private Disposable btConnStateDisposable;
+    private Disposable calibrateDisposable;
     private Disposable commandDisposable;
 
     @Override
@@ -60,7 +66,7 @@ public class RaceTrackerFragment extends Fragment implements RaceTimeServiceSubs
 
     public void onStart() {
         super.onStart();
-        if(raceTimeService != null) {
+        if(raceTimeService != null && raceTimeService.getRaceTracker() != null) {
             initUI();
         }
     }
@@ -72,6 +78,11 @@ public class RaceTrackerFragment extends Fragment implements RaceTimeServiceSubs
 
     public void onStop() {
         super.onStop();
+        if(calibrateDisposable != null) {
+            calibrateDisposable.dispose();
+            calibrateDisposable = null;
+        }
+
         if(commandDisposable != null) {
             commandDisposable.dispose();
             commandDisposable = null;
@@ -87,6 +98,37 @@ public class RaceTrackerFragment extends Fragment implements RaceTimeServiceSubs
         raceTimeService = null;
     }
 
+    @OnClick(R.id.calibrate)
+    public void onCalibrateClick() {
+        calibrateButton.setEnabled(false);
+        calibrationView.setText("");
+        calibrateDisposable = raceTimeService.getRaceTracker().calibrate()
+                .observeOn(AndroidSchedulers.mainThread())
+                .doFinally(() -> {
+                    calibrateDisposable.dispose();
+                    calibrateDisposable = null;
+                })
+                .subscribe(status -> {
+                    int buttonText;
+                    switch (status) {
+                        case RaceTracker.CALIBRATING_STATE:
+                            buttonText = R.string.calibrating;
+                            break;
+                        case RaceTracker.CALIBRATED_STATE:
+                            buttonText = R.string.calibrated;
+                            new CalibrationTask().execute();
+                            break;
+                        default:
+                            buttonText = R.string.calibrate;
+                    }
+                    calibrateButton.setText(buttonText);
+                },
+                ex -> {
+                    calibrateButton.setText(R.string.calibrate);
+                    calibrateButton.setEnabled(true);
+                });
+    }
+
     @OnClick(R.id.send)
     public void onSendClick() {
         String cmd = commandText.getText().toString();
@@ -96,7 +138,6 @@ public class RaceTrackerFragment extends Fragment implements RaceTimeServiceSubs
             responseView.setText("");
             commandDisposable = raceTimeService.getRaceTracker().sendAndObserve(commandText.getText().toString())
                     .observeOn(AndroidSchedulers.mainThread())
-                    .firstOrError()
                     .doFinally(() -> {
                         commandDisposable.dispose();
                         commandDisposable = null;
@@ -136,12 +177,16 @@ public class RaceTrackerFragment extends Fragment implements RaceTimeServiceSubs
                     break;
                 case CONNECTED:
                     color = connectedColor;
+                    calibrateButton.setEnabled(true);
+                    sendButton.setEnabled(true);
                     break;
                 case DISCONNECTING:
                     color = disconnectingColor;
                     break;
                 default:
                     color = disconnectedColor;
+                    calibrateButton.setEnabled(false);
+                    sendButton.setEnabled(false);
             }
             bluetoothAddressView.setTextColor(color);
         }
@@ -156,12 +201,25 @@ public class RaceTrackerFragment extends Fragment implements RaceTimeServiceSubs
     public void subscribeToRaceTimeService(Observable<RaceTimeService> serviceObservable) {
         raceTimeServiceDisposable = serviceObservable.subscribe(service -> {
             this.raceTimeService = service;
-            sendButton.setEnabled(true);
             initUI();
         });
     }
 
     @Override
     public void setRaceTimeServiceManager(RaceTimeServiceManager manager) {
+    }
+
+    class CalibrationTask extends AsyncTask<Void,Void,Integer> {
+        @Override
+        protected Integer doInBackground(Void... args) {
+            return raceTimeService.getRaceTracker().getTriggerThreshold();
+        }
+
+        @Override
+        protected void onPostExecute(Integer threshold) {
+            calibrationView.setText(String.valueOf(threshold));
+            calibrateButton.setText(R.string.calibrate);
+            calibrateButton.setEnabled(true);
+        }
     }
 }

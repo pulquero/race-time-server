@@ -17,6 +17,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import io.reactivex.Observable;
+import io.reactivex.Single;
 import io.reactivex.disposables.Disposable;
 import io.reactivex.functions.Predicate;
 import io.reactivex.internal.functions.Functions;
@@ -33,13 +34,16 @@ public class RaceTracker {
     private static final String BATTERY = "B";
     /**
      * F ${timeoutSecs}
+     * Timeout:${timeoutSecs}s
      */
-    private static final String TIMEOUT = "F";
+    private static final String MIN_LAP_TIME = "F";
     /**
      * G
      * Cal in-progress -> Calibrated
      */
     private static final String CALIBRATION = "G";
+    public static final String CALIBRATING_STATE = "Cal in-progress";
+    public static final String CALIBRATED_STATE = "Calibrated";
     private static final String NAME = "I";
     private static final String GATE_DRIVERS = "L";
     private static final String RACE_MODE = "M";
@@ -49,12 +53,13 @@ public class RaceTracker {
      */
     private static final String PILOTS = "N";
     private static final String PILOTS_RESPONSE = "Racers";
+    private static final String MAX_LAPS = "O";
     /**
      * Will interrupt a race.
      * ${bandChannel},${rssi}dbm,${x}
      */
-    private static final String RSSI = "Q";
-    private static final Pattern RSSI_RESPONSE = Pattern.compile("([ABCEF][1-8]),(-?[0-9]+(\\.[0-9]+)?)dbm,(-?[0-9]+)");
+    private static final String VRX = "Q";
+    private static final Pattern VRX_RESPONSE = Pattern.compile("([ABCEF][1-8]),(-?[0-9]+(\\.[0-9]+)?)dbm,([\\+-]?[0-9]+)");
     /**
      * R
      * Total Rounds:${lapCount}
@@ -74,6 +79,8 @@ public class RaceTracker {
      * 32 = Pilot 8 band-channel
      */
     private static final String CONFIG = "Z";
+    private static final int Z_TRIGGER_THRESHOLD_INDEX = 1;
+    private static final int Z_MAX_LAPS_INDEX = 1;
     private static final int Z_MIN_LAP_TIME_INDEX = 13;
     private static final int Z_PILOT_FREQ_INDEX = 25;
 
@@ -84,10 +91,17 @@ public class RaceTracker {
     // P${pilot}R${lap}T${lapTime},${time}
     public static final int SHOTGUN_RACE = 1;
     public static final int FLYOVER_RACE = 2;
-    private static final String START_RACE3 = "3";
+    private static final String GATE_COLOR = "3";
     private static final String READY = "READY";
     private static final Pattern SINGLE_PILOT_LAP = Pattern.compile("R([0-9]+),T([0-9]+),([0-9]+)");
     private static final Pattern MULTI_PILOT_LAP = Pattern.compile("P([0-9])R([0-9]+)T([0-9]+),([0-9]+)");
+    private static final String GET_TRIGGER_THRESHOLD = ".";
+    private static final String SET_TRIGGER_THRESHOLD = ",";
+    private static final String TRIGGER_THRESHOLD_RESPONSE = "GATE";
+    /**
+     * RSSI: ${rssi}
+     */
+    private static final String RSSI = "/";
 
     private static final String BAND_A = "A";
     private static final String BAND_B = "B";
@@ -146,9 +160,12 @@ public class RaceTracker {
     }
 
     public void connect() {
+        if(conn != null) {
+            throw new IllegalStateException("Already connected");
+        }
         conn = device.establishConnection(false).subscribeOn(Schedulers.io()).compose(ReplayingShare.instance());
         // establish connection
-        connDisposable = conn.subscribe(conn -> Log.i(LOG_TAG, "Connected"), ex -> Log.e(LOG_TAG, "Connection error"));
+        connDisposable = conn.subscribe(conn -> Log.i(LOG_TAG, "Connected"), ex -> Log.e(LOG_TAG, "Connection error: "+ex.getMessage()));
     }
 
     public void disconnect() {
@@ -157,7 +174,7 @@ public class RaceTracker {
         conn = null;
     }
 
-    public synchronized Observable<String> sendAndObserve(String cmd) {
+    public synchronized Single<String> sendAndObserve(String cmd) {
         if(cmd.length() + 1 > MAX_DATA_SIZE) { // including null terminator
             throw new IllegalArgumentException("Invalid command - too long");
         }
@@ -173,14 +190,15 @@ public class RaceTracker {
                                 .flatMap(writtenSZ -> conn.readCharacteristic(READ_UUID).subscribeOn(Schedulers.io()))
                     )
             .map(RaceTracker::bytesToString)
+            .firstOrError()
             .observeOn(Schedulers.io());
     }
 
     public String send(String cmd) {
-        return sendAndObserve(cmd).blockingFirst();
+        return sendAndObserve(cmd).blockingGet();
     }
 
-    private String send(String cmd, Predicate<String> isExpectedResponse) {
+    private synchronized String send(String cmd, Predicate<String> isExpectedResponse) {
         BleException exception = null;
         for(int i=0; i<RETRIES; i++) {
             try {
@@ -220,9 +238,22 @@ public class RaceTracker {
         return result.substring(pos + 1).trim();
     }
 
+    public synchronized Observable<String> calibrate() {
+        return conn.subscribeOn(Schedulers.io())
+                .flatMap(conn ->
+                        conn.writeCharacteristic(WRITE_UUID, stringToBytes(CALIBRATION)).subscribeOn(Schedulers.io())
+                        .flatMapObservable(raceRead -> Observable.mergeArrayDelayError(
+                            conn.readCharacteristic(READ_UUID).toObservable().subscribeOn(Schedulers.io()),
+                            conn.setupNotification(READ_UUID).flatMap(Functions.identity()).subscribeOn(Schedulers.io())
+                        )).subscribeOn(Schedulers.io())
+                )
+                .map(RaceTracker::bytesToString)
+                .takeUntil((String s) -> CALIBRATED_STATE.equals(s));
+    }
+
     public int getRssi() {
-        String result = send(RSSI, s -> RSSI_RESPONSE.matcher(s).matches());
-        Matcher matcher = RSSI_RESPONSE.matcher(result);
+        String result = send(VRX, new RegexPredicate(VRX_RESPONSE));
+        Matcher matcher = VRX_RESPONSE.matcher(result);
         matcher.matches();
         float rssi = Float.parseFloat(matcher.group(2));
         return Math.round(rssi)+123;
@@ -257,6 +288,15 @@ public class RaceTracker {
         if(bandChannel != null) {
             send(PILOTS + " " + (pilotIndex+1) + " " + bandChannel);
         }
+    }
+
+    public int getTriggerThreshold() {
+        String threshold = getConfig(Z_TRIGGER_THRESHOLD_INDEX);
+        return Integer.parseInt(threshold);
+    }
+
+    public void setTriggerThreshold(int threshold) {
+        send(SET_TRIGGER_THRESHOLD+" "+threshold);
     }
 
     public int getPilotFrequency(int pilotIndex) {
@@ -300,7 +340,7 @@ public class RaceTracker {
     public synchronized Observable<LapNotification> startRace(int mode) {
         return conn.subscribeOn(Schedulers.io())
                 .flatMap(conn ->
-                        conn.writeCharacteristic(WRITE_UUID, stringToBytes(RSSI)).subscribeOn(Schedulers.io())
+                        conn.writeCharacteristic(WRITE_UUID, stringToBytes(VRX)).subscribeOn(Schedulers.io())
                         .flatMap(rssiWritten -> conn.readCharacteristic(READ_UUID).subscribeOn(Schedulers.io()))
                         .flatMap(rssiRead -> conn.writeCharacteristic(WRITE_UUID, stringToBytes(String.valueOf(mode))).subscribeOn(Schedulers.io()))
                         .flatMap(raceWritten -> conn.readCharacteristic(READ_UUID).subscribeOn(Schedulers.io()))
@@ -356,6 +396,18 @@ public class RaceTracker {
         LapNotification(int pilot, long ts) {
             this.pilot = pilot;
             this.ts = ts;
+        }
+    }
+
+    static final class RegexPredicate implements Predicate<String> {
+        final Pattern regex;
+
+        RegexPredicate(Pattern regex) {
+            this.regex = regex;
+        }
+
+        public boolean test(String s) {
+            return regex.matcher(s).matches();
         }
     }
 }

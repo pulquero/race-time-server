@@ -4,9 +4,12 @@
     <string name="stopScan">Stop</string>
     <string name="errNoBluetooth">Bluetooth not available</string>
     <string name="errLocationOff">Location services not enabled</string>
-    <string name="racetrackerTitle">RaceTracker</string>
+    <string name="raceTrackerTitle">RaceTracker</string>
+    <string name="calibrate">Calibrate</string>
+    <string name="calibrating">Calibrating</string>
+    <string name="calibrated">Calibrated</string>
     <string name="send">Send</string>
-    <string name="timingserverTitle">Timing server</string>
+    <string name="timingServerTitle">Timing server</string>
     <string name="startServer">Start</string>
     <string name="stopServer">Stop</string>
     <string name="isRunning">Already running</string>

@@ -169,11 +169,21 @@ public class TimingServer extends WebSocketServer {
             nodesJson.put(nodeJson);
         }
 
+        int calibrationThreshold = 0;
+        int calibrationOffset = 0;
+        int triggerThreshold;
+        try {
+            triggerThreshold = raceTracker.getTriggerThreshold();
+        } catch (Exception e) {
+            Log.w(LOG_TAG,"settings - trigger threshold", e);
+            triggerThreshold = 0;
+        }
+
         JSONObject json = new JSONObject();
         json.put("nodes", nodesJson);
-        json.put(CALIBRATION_THRESHOLD, 2);
-        json.put(CALIBRATION_OFFSET, 3);
-        json.put(TRIGGER_THRESHOLD, 4);
+        json.put(CALIBRATION_THRESHOLD, calibrationThreshold);
+        json.put(CALIBRATION_OFFSET, calibrationOffset);
+        json.put(TRIGGER_THRESHOLD, triggerThreshold);
         return json;
     }
 
@@ -214,6 +224,7 @@ public class TimingServer extends WebSocketServer {
                     case CALIBRATION_OFFSET:
                         break;
                     case TRIGGER_THRESHOLD:
+                        raceTracker.setTriggerThreshold(Integer.parseInt(json.getString(key)));
                         break;
                 }
             }

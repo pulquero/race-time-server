@@ -1,5 +1,6 @@
 package io.github.pulquero.racetimeserver;
 
+import android.os.AsyncTask;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.LayoutInflater;
@@ -50,7 +51,7 @@ public class TimingServerFragment extends Fragment implements RaceTimeServiceSub
 
     public void onStart() {
         super.onStart();
-        if(raceTimeService != null) {
+        if(raceTimeService != null && raceTimeService.getTimingServer() != null) {
             initUI();
         }
     }
@@ -75,16 +76,10 @@ public class TimingServerFragment extends Fragment implements RaceTimeServiceSub
 
     @OnClick(R.id.server)
     public void onServerToggleClick() {
+        serverToggleButton.setEnabled(false);
         if(raceTimeService.inUse()) {
-            raceTimeService.getTimingServer().stop();
-            stopMonitoringNetworkConnectionState();
-            raceTimeServiceManager.stopFromRunningInBackground();
-            raceTimeService.restartTimingService();
-            updateNetworkAddressView(raceTimeService.getTimingServer().getState(), null);
-            updateServerToggleButton();
-            startMonitoringNetworkConnectionState();
+            new StopTask().execute();
         } else {
-            serverToggleButton.setEnabled(false);
             raceTimeServiceManager.keepRunningInBackground();
             raceTimeService.getTimingServer().start();
         }
@@ -145,5 +140,25 @@ public class TimingServerFragment extends Fragment implements RaceTimeServiceSub
     @Override
     public void setRaceTimeServiceManager(RaceTimeServiceManager manager) {
         raceTimeServiceManager = manager;
+    }
+
+
+    class StopTask extends AsyncTask<Void,Void,Void> {
+        @Override
+        protected Void doInBackground(Void... args) {
+            raceTimeService.getTimingServer().stop();
+            stopMonitoringNetworkConnectionState();
+            raceTimeServiceManager.stopFromRunningInBackground();
+            raceTimeService.restartTimingService();
+            startMonitoringNetworkConnectionState();
+            return null;
+        }
+
+        @Override
+        protected void onPostExecute(Void result) {
+            updateNetworkAddressView(raceTimeService.getTimingServer().getState(), null);
+            updateServerToggleButton();
+            serverToggleButton.setEnabled(true);
+        }
     }
 }
