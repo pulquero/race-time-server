@@ -79,7 +79,10 @@ public class RaceTracker {
      * 32 = Pilot 8 band-channel
      */
     private static final String CONFIG = "Z";
-    private static final int Z_TRIGGER_THRESHOLD_INDEX = 1;
+    /**
+     * Calibration value.
+     */
+    private static final int Z_TRIGGER_RSSI_INDEX = 1;
     private static final int Z_MAX_LAPS_INDEX = 1;
     private static final int Z_MIN_LAP_TIME_INDEX = 13;
     private static final int Z_PILOT_FREQ_INDEX = 25;
@@ -95,13 +98,14 @@ public class RaceTracker {
     private static final String READY = "READY";
     private static final Pattern SINGLE_PILOT_LAP = Pattern.compile("R([0-9]+),T([0-9]+),([0-9]+)");
     private static final Pattern MULTI_PILOT_LAP = Pattern.compile("P([0-9])R([0-9]+)T([0-9]+),([0-9]+)");
-    private static final String GET_TRIGGER_THRESHOLD = ".";
-    private static final String SET_TRIGGER_THRESHOLD = ",";
-    private static final String TRIGGER_THRESHOLD_RESPONSE = "GATE";
+    private static final String GET_TRIGGER_RSSI = ".";
+    private static final String SET_TRIGGER_RSSI = ",";
+    private static final String TRIGGER_RSSI_RESPONSE = "GATE";
     /**
      * RSSI: ${rssi}
      */
     private static final String RSSI = "/";
+    private static final String RSSI_RESPONSE = "RSSI";
 
     private static final String BAND_A = "A";
     private static final String BAND_B = "B";
@@ -251,12 +255,13 @@ public class RaceTracker {
                 .takeUntil((String s) -> CALIBRATED_STATE.equals(s));
     }
 
+    public void activateVRX() {
+        send(VRX, new RegexPredicate(VRX_RESPONSE));
+    }
+
     public int getRssi() {
-        String result = send(VRX, new RegexPredicate(VRX_RESPONSE));
-        Matcher matcher = VRX_RESPONSE.matcher(result);
-        matcher.matches();
-        float rssi = Float.parseFloat(matcher.group(2));
-        return Math.round(rssi)+123;
+        String result = readValue(RSSI, RSSI_RESPONSE);
+        return Integer.parseInt(result);
     }
 
     public int getPilotCount() {
@@ -290,13 +295,13 @@ public class RaceTracker {
         }
     }
 
-    public int getTriggerThreshold() {
-        String threshold = getConfig(Z_TRIGGER_THRESHOLD_INDEX);
-        return Integer.parseInt(threshold);
+    public int getTriggerRssi() {
+        String rssi = getConfig(Z_TRIGGER_RSSI_INDEX);
+        return Integer.parseInt(rssi);
     }
 
-    public void setTriggerThreshold(int threshold) {
-        send(SET_TRIGGER_THRESHOLD+" "+threshold);
+    public void setTriggerRssi(int rssi) {
+        send(SET_TRIGGER_RSSI + " " + rssi);
     }
 
     public int getPilotFrequency(int pilotIndex) {

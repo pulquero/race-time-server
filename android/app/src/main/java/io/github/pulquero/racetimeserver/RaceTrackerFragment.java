@@ -72,7 +72,7 @@ public class RaceTrackerFragment extends Fragment implements RaceTimeServiceSubs
     }
 
     private void initUI() {
-        updateBluetoothAddressView(raceTimeService.getRaceTracker().getConnectionState(), null);
+        updateUI(raceTimeService.getRaceTracker().getConnectionState(), null);
         startMonitoringBluetoothConnectionState();
     }
 
@@ -116,7 +116,7 @@ public class RaceTrackerFragment extends Fragment implements RaceTimeServiceSubs
                             break;
                         case RaceTracker.CALIBRATED_STATE:
                             buttonText = R.string.calibrated;
-                            new CalibrationTask().execute();
+                            new CalibrationValueTask().execute();
                             break;
                         default:
                             buttonText = R.string.calibrate;
@@ -158,15 +158,18 @@ public class RaceTrackerFragment extends Fragment implements RaceTimeServiceSubs
     private void startMonitoringBluetoothConnectionState() {
         btConnStateDisposable = raceTimeService.getRaceTracker().observeConnectionState()
                 .observeOn(AndroidSchedulers.mainThread())
-                .subscribe(state -> updateBluetoothAddressView(state, null),
+                .subscribe(state -> updateUI(state, null),
                         ex -> {
                             Log.e(LOG_TAG, "Bluetooth connection status", ex);
-                            updateBluetoothAddressView(null, ex);
+                            updateUI(null, ex);
                         });
     }
 
-    private void updateBluetoothAddressView(RxBleConnection.RxBleConnectionState state, Throwable err) {
-        bluetoothAddressView.setText(raceTimeService.getRaceTracker().getAddress());
+    private void updateUI(RxBleConnection.RxBleConnectionState state, Throwable err) {
+        if(raceTimeService != null) {
+            bluetoothAddressView.setText(raceTimeService.getRaceTracker().getAddress());
+        }
+
         if(err != null) {
             bluetoothAddressView.setTextColor(errorColor);
         } else {
@@ -177,6 +180,7 @@ public class RaceTrackerFragment extends Fragment implements RaceTimeServiceSubs
                     break;
                 case CONNECTED:
                     color = connectedColor;
+                    new CalibrationValueTask().execute();
                     calibrateButton.setEnabled(true);
                     sendButton.setEnabled(true);
                     break;
@@ -209,10 +213,10 @@ public class RaceTrackerFragment extends Fragment implements RaceTimeServiceSubs
     public void setRaceTimeServiceManager(RaceTimeServiceManager manager) {
     }
 
-    class CalibrationTask extends AsyncTask<Void,Void,Integer> {
+    class CalibrationValueTask extends AsyncTask<Void,Void,Integer> {
         @Override
         protected Integer doInBackground(Void... args) {
-            return raceTimeService.getRaceTracker().getTriggerThreshold();
+            return (raceTimeService != null) ? raceTimeService.getRaceTracker().getTriggerRssi() : 0;
         }
 
         @Override

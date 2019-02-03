@@ -34,6 +34,8 @@ public class TimingServer extends WebSocketServer {
     private static final String CALIBRATION_THRESHOLD = "calibration_threshold";
     private static final String CALIBRATION_OFFSET = "calibration_offset";
     private static final String TRIGGER_THRESHOLD = "trigger_threshold";
+    private static final String TRIGGER_RSSI = "trigger_rssi";
+    private static final String CURRENT_RSSI = "current_rssi";
     private static final String FREQUENCY = "frequency";
     private static final String NODE = "node";
     private static final String TIMESTAMP = "timestamp";
@@ -147,7 +149,6 @@ public class TimingServer extends WebSocketServer {
     }
 
     private JSONObject getSettings() throws JSONException {
-        JSONArray nodesJson = new JSONArray();
         int nodeCount;
         try {
             nodeCount = raceTracker.getPilotCount();
@@ -155,6 +156,18 @@ public class TimingServer extends WebSocketServer {
             Log.w(LOG_TAG,"settings - pilot count", e);
             nodeCount = 0;
         }
+        int triggerRssi;
+        try {
+            triggerRssi = raceTracker.getTriggerRssi();
+        } catch (Exception e) {
+            Log.w(LOG_TAG,"settings - trigger RSSI", e);
+            triggerRssi = 0;
+        }
+        int calibrationThreshold = 0;
+        int calibrationOffset = 0;
+
+        JSONArray nodesJson = new JSONArray();
+
         for (int i = 0; i < nodeCount; i++) {
             int freq;
             try {
@@ -165,25 +178,15 @@ public class TimingServer extends WebSocketServer {
             }
             JSONObject nodeJson = new JSONObject();
             nodeJson.put(FREQUENCY, freq);
-            nodeJson.put("trigger_rssi", 32);
+            nodeJson.put(TRIGGER_RSSI, triggerRssi);
             nodesJson.put(nodeJson);
-        }
-
-        int calibrationThreshold = 0;
-        int calibrationOffset = 0;
-        int triggerThreshold;
-        try {
-            triggerThreshold = raceTracker.getTriggerThreshold();
-        } catch (Exception e) {
-            Log.w(LOG_TAG,"settings - trigger threshold", e);
-            triggerThreshold = 0;
         }
 
         JSONObject json = new JSONObject();
         json.put("nodes", nodesJson);
         json.put(CALIBRATION_THRESHOLD, calibrationThreshold);
         json.put(CALIBRATION_OFFSET, calibrationOffset);
-        json.put(TRIGGER_THRESHOLD, triggerThreshold);
+        json.put(TRIGGER_THRESHOLD, triggerRssi);
         return json;
     }
 
@@ -224,7 +227,7 @@ public class TimingServer extends WebSocketServer {
                     case CALIBRATION_OFFSET:
                         break;
                     case TRIGGER_THRESHOLD:
-                        raceTracker.setTriggerThreshold(Integer.parseInt(json.getString(key)));
+                        raceTracker.setTriggerRssi(Integer.parseInt(json.getString(key)));
                         break;
                 }
             }
@@ -239,7 +242,7 @@ public class TimingServer extends WebSocketServer {
         // start heartbeat if not already running
         if(attachmentData.heartbeat == null) {
             attachmentData.heartbeat = new HeartbeatTask(conn);
-            timer.schedule(attachmentData.heartbeat, 5000L, 15000L);
+            timer.schedule(attachmentData.heartbeat, 8000L, 15000L);
         }
     }
 
@@ -256,7 +259,7 @@ public class TimingServer extends WebSocketServer {
             }
         }
         JSONObject json = new JSONObject();
-        json.put("current_rssi", rssiJson);
+        json.put(CURRENT_RSSI, rssiJson);
         String notification = createNotification("heartbeat", json);
         conn.send(notification);
     }
@@ -284,6 +287,7 @@ public class TimingServer extends WebSocketServer {
 
     final class HeartbeatTask extends TimerTask {
         final WebSocket conn;
+        boolean isFirst = true;
 
         HeartbeatTask(WebSocket conn) {
             this.conn = conn;
@@ -291,6 +295,10 @@ public class TimingServer extends WebSocketServer {
 
         @Override
         public void run() {
+            if(isFirst) {
+                raceTracker.activateVRX();
+                isFirst = false;
+            }
             try {
                 sendHeartbeat(conn);
             } catch (WebsocketNotConnectedException e) {
