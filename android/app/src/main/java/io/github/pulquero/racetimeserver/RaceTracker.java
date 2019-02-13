@@ -54,6 +54,7 @@ public class RaceTracker {
     private static final String PILOTS = "N";
     private static final String PILOTS_RESPONSE = "Racers";
     private static final String MAX_LAPS = "O";
+    private static final String SCALING_FACTOR = "o";
     /**
      * Will interrupt a race.
      * ${bandChannel},${rssi}dbm,${x}
@@ -78,13 +79,17 @@ public class RaceTracker {
      * 25 = Pilot 1 band-channel
      * 32 = Pilot 8 band-channel
      */
-    private static final String CONFIG = "Z";
+    private static final String FLASH = "Z";
     /**
      * Calibration value.
      */
     private static final int Z_TRIGGER_RSSI_INDEX = 1;
-    private static final int Z_MAX_LAPS_INDEX = 1;
-    private static final int Z_MIN_LAP_TIME_INDEX = 13;
+    private static final int Z_MAX_LAPS_INDEX = 2;
+    private static final int Z_MIN_LAP_TIME_INDEX = 6;
+    private static final int Z_TX_POWER_INDEX = 7;
+    private static final int Z_RX_GAIN_INDEX = 8;
+    private static final int Z_GATE_DRIVERS_INDEX = 10;
+    private static final int Z_NORMALIZE_DRONES_INDEX = 24;
     private static final int Z_PILOT_FREQ_INDEX = 25;
 
     private static final String STOP_RACE = "0";
@@ -98,6 +103,7 @@ public class RaceTracker {
     private static final String READY = "READY";
     private static final Pattern SINGLE_PILOT_LAP = Pattern.compile("R([0-9]+),T([0-9]+),([0-9]+)");
     private static final Pattern MULTI_PILOT_LAP = Pattern.compile("P([0-9])R([0-9]+)T([0-9]+),([0-9]+)");
+    private static final String TEST_LEDS = "=";
     private static final String GET_TRIGGER_RSSI = ".";
     private static final String SET_TRIGGER_RSSI = ",";
     private static final String TRIGGER_RSSI_RESPONSE = "GATE";
@@ -296,7 +302,7 @@ public class RaceTracker {
     }
 
     public int getTriggerRssi() {
-        String rssi = getConfig(Z_TRIGGER_RSSI_INDEX);
+        String rssi = readFlash(Z_TRIGGER_RSSI_INDEX);
         return Integer.parseInt(rssi);
     }
 
@@ -306,7 +312,7 @@ public class RaceTracker {
 
     public int getPilotFrequency(int pilotIndex) {
         if(pilotFreqs[pilotIndex] == 0) {
-            String bandChannel = getConfig(Z_PILOT_FREQ_INDEX + pilotIndex);
+            String bandChannel = readFlash(Z_PILOT_FREQ_INDEX + pilotIndex);
             String band = bandChannel.substring(0, 1);
             int channelIndex = Integer.parseInt(bandChannel.substring(1, 2)) - 1;
             short freq;
@@ -334,8 +340,8 @@ public class RaceTracker {
         return pilotFreqs[pilotIndex];
     }
 
-    private String getConfig(int index) {
-        return readValue(CONFIG + " " + index, String.valueOf(index));
+    private String readFlash(int index) {
+        return readValue(FLASH + " " + index, String.valueOf(index));
     }
 
     public void stopRace() {

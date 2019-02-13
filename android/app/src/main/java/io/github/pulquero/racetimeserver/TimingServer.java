@@ -113,13 +113,15 @@ public class TimingServer extends WebSocketServer {
     @Override
     public void onMessage(WebSocket conn, String message) {
         try {
-            if(message.charAt(0) == '{') {
-                // JSON object
-                set(conn, new JSONObject(message));
-            } else {
-                JSONObject result = get(conn, message);
-                if (result != null) {
-                    conn.send(result.toString());
+            synchronized (conn) {
+                if (message.charAt(0) == '{') {
+                    // JSON object
+                    set(conn, new JSONObject(message));
+                } else {
+                    JSONObject result = get(conn, message);
+                    if (result != null) {
+                        conn.send(result.toString());
+                    }
                 }
             }
         } catch(JSONException ex) {
@@ -247,21 +249,23 @@ public class TimingServer extends WebSocketServer {
     }
 
     private void sendHeartbeat(WebSocket conn) throws JSONException {
-        JSONArray rssiJson = new JSONArray();
-        int nodeCount = raceTracker.getPilotCount();
-        for (int i = 0; i < nodeCount; i++) {
-            // rssi only available for the principal channel
-            if(i == 0) {
-                int rssi = raceTracker.getRssi();
-                rssiJson.put(rssi);
-            } else {
-                rssiJson.put(0);
+        synchronized (conn) {
+            JSONArray rssiJson = new JSONArray();
+            int nodeCount = raceTracker.getPilotCount();
+            for (int i = 0; i < nodeCount; i++) {
+                // rssi only available for the principal channel
+                if (i == 0) {
+                    int rssi = raceTracker.getRssi();
+                    rssiJson.put(rssi);
+                } else {
+                    rssiJson.put(0);
+                }
             }
+            JSONObject json = new JSONObject();
+            json.put(CURRENT_RSSI, rssiJson);
+            String notification = createNotification("heartbeat", json);
+            conn.send(notification);
         }
-        JSONObject json = new JSONObject();
-        json.put(CURRENT_RSSI, rssiJson);
-        String notification = createNotification("heartbeat", json);
-        conn.send(notification);
     }
 
     public void sendPass(WebSocket conn, int pilot, long ts) throws JSONException {
