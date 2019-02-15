@@ -34,6 +34,10 @@ public class TimingServer extends WebSocketServer {
     private static final String CALIBRATION_THRESHOLD = "calibration_threshold";
     private static final String CALIBRATION_OFFSET = "calibration_offset";
     private static final String TRIGGER_THRESHOLD = "trigger_threshold";
+    /**
+     * Custom setting.
+     */
+    private static final String MIN_LAP_TIME = "minimum_lap_time";
     private static final String TRIGGER_RSSI = "trigger_rssi";
     private static final String CURRENT_RSSI = "current_rssi";
     private static final String FREQUENCY = "frequency";
@@ -230,6 +234,9 @@ public class TimingServer extends WebSocketServer {
                         break;
                     case TRIGGER_THRESHOLD:
                         raceTracker.setTriggerRssi(Integer.parseInt(json.getString(key)));
+                        break;
+                    case MIN_LAP_TIME:
+                        raceTracker.setMinimumLapTime(Integer.parseInt(json.getString(key)));
                         break;
                 }
             }

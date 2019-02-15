@@ -310,6 +310,10 @@ public class RaceTracker {
         send(SET_TRIGGER_RSSI + " " + rssi);
     }
 
+    public void setMinimumLapTime(int secs) {
+        send(MIN_LAP_TIME + " " + secs);
+    }
+
     public int getPilotFrequency(int pilotIndex) {
         if(pilotFreqs[pilotIndex] == 0) {
             String bandChannel = readFlash(Z_PILOT_FREQ_INDEX + pilotIndex);
