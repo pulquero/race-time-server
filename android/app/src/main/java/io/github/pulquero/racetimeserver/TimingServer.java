@@ -35,7 +35,7 @@ public class TimingServer extends WebSocketServer {
     private static final String CALIBRATION_OFFSET = "calibration_offset";
     private static final String TRIGGER_THRESHOLD = "trigger_threshold";
     /**
-     * Custom setting.
+     * Extension.
      */
     private static final String MIN_LAP_TIME = "minimum_lap_time";
     private static final String TRIGGER_RSSI = "trigger_rssi";
