@@ -1,5 +1,5 @@
 
-Race Time Server
+[Race Time Server](https://github.com/pulquero/race-time-server)
 
 Race Time Server provides an interface between third-party timing software,
 such as [LiveTime](https://www.livetimescoring.com/),
