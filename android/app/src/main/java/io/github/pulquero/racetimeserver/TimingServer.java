@@ -43,6 +43,10 @@ public class TimingServer extends WebSocketServer {
     private static final String FREQUENCY = "frequency";
     private static final String NODE = "node";
     private static final String TIMESTAMP = "timestamp";
+    private static final String FREQUENCY_SET_NOTIF = "frequency_set";
+    private static final String TRIGGER_THRESHOLD_SET_NOTIF = "trigger_threshold_set";
+    private static final String HEARTBEAT_NOTIF = "heartbeat";
+    private static final String PASS_RECORD_NOTIF = "pass_record";
 
     enum State {
         STARTED, CONNECTED, STOPPED
@@ -122,6 +126,7 @@ public class TimingServer extends WebSocketServer {
                     // JSON object
                     set(conn, new JSONObject(message));
                 } else {
+                    // 'get' command
                     JSONObject result = get(conn, message);
                     if (result != null) {
                         conn.send(result.toString());
@@ -207,10 +212,13 @@ public class TimingServer extends WebSocketServer {
         if(json.has(NODE)) {
             int node = json.getInt(NODE);
             if(node != -1) {
+                // set_frequency
                 ensureHeartbeat(conn);
                 int freq = json.getInt(FREQUENCY);
                 raceTracker.setPilotFrequency(node, freq);
+                sendNotification(conn, FREQUENCY_SET_NOTIF, json);
             } else {
+                // reset_auto_calibration
                 // closest thing to a start race message
                 // there is nothing equivalent to a stop race message besides any other message
                 AttachmentData attachmentData = conn.getAttachment();
@@ -234,6 +242,7 @@ public class TimingServer extends WebSocketServer {
                         break;
                     case TRIGGER_THRESHOLD:
                         raceTracker.setTriggerRssi(Integer.parseInt(json.getString(key)));
+                        sendNotification(conn, TRIGGER_THRESHOLD_SET_NOTIF, json);
                         break;
                     case MIN_LAP_TIME:
                         raceTracker.setMinimumLapTime(Integer.parseInt(json.getString(key)));
@@ -270,8 +279,7 @@ public class TimingServer extends WebSocketServer {
             }
             JSONObject json = new JSONObject();
             json.put(CURRENT_RSSI, rssiJson);
-            String notification = createNotification("heartbeat", json);
-            conn.send(notification);
+            sendNotification(conn, HEARTBEAT_NOTIF, json);
         }
     }
 
@@ -280,15 +288,15 @@ public class TimingServer extends WebSocketServer {
         json.put(TIMESTAMP, ts);
         json.put(NODE, pilot);
         json.put(FREQUENCY, raceTracker.getPilotFrequency(pilot));
-        String notification = createNotification("pass_record", json);
-        conn.send(notification);
+        sendNotification(conn, PASS_RECORD_NOTIF, json);
     }
 
-    private String createNotification(String type, JSONObject data) throws JSONException {
+    private void sendNotification(WebSocket conn, String type, JSONObject data) throws JSONException {
         JSONObject json = new JSONObject();
         json.put("notification", type);
         json.put("data", data);
-        return json.toString();
+        String notification = json.toString();
+        conn.send(notification);
     }
 
     @Override
